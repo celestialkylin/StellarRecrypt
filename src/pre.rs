@@ -478,44 +478,55 @@ pub fn decrypt_reencrypted(
 // Strkey convenience (only the paths that still make sense)
 // ---------------------------------------------------------------------------
 
-/// Decrypt with Alice's Stellar `S...` (default HKDF `pre_sk`).
-pub fn decrypt_with_strkey(alice_s: &str, ct: &Ciphertext) -> Result<Vec<u8>> {
-    let sk = StellarSecretKey::from_strkey(alice_s, None)?;
+/// Decrypt with Alice's Stellar `S...` and the same HKDF `info` used at encrypt time.
+pub fn decrypt_with_strkey(alice_s: &str, info: &[u8], ct: &Ciphertext) -> Result<Vec<u8>> {
+    let sk = StellarSecretKey::from_strkey(alice_s, info)?;
     decrypt(&sk, ct)
 }
 
 /// Generate re-encryption key from Alice's `S...` and Bob's `G...`.
 ///
-/// Uses Alice's default PRE scalar (`info = None`). For per-recipient isolation,
-/// construct [`StellarSecretKey`] with a custom info and call [`rekey_gen`].
+/// `info` must match the HKDF context used to derive Alice's `pre_sk` / `pre_pk`
+/// for this ciphertext. Prefer [`crate::structured_info`] for per-purpose /
+/// per-recipient isolation.
 pub fn rekey_gen_strkey<R: CryptoRng + RngCore>(
     rng: &mut R,
     alice_s: &str,
+    info: &[u8],
     bob_g: &str,
 ) -> Result<ReencryptionKey> {
-    let alice = StellarSecretKey::from_strkey(alice_s, None)?;
+    let alice = StellarSecretKey::from_strkey(alice_s, info)?;
     let bob = StellarPublicKey::from_strkey(bob_g)?;
     rekey_gen(rng, &alice, &bob)
 }
 
 /// Decrypt re-encrypted ciphertext with Bob's `S...` (signing scalar).
+///
+/// Only the signing scalar is used; HKDF `info` is irrelevant. A placeholder
+/// is supplied when constructing [`StellarSecretKey`] internally.
 pub fn decrypt_reencrypted_with_strkey(
     bob_s: &str,
     reenc: &ReencryptedCiphertext,
 ) -> Result<Vec<u8>> {
-    let bob = StellarSecretKey::from_strkey(bob_s, None)?;
+    // pre_sk is unused for re-encrypted decrypt; any explicit info is fine.
+    let bob = StellarSecretKey::from_strkey(bob_s, b"")?;
     decrypt_reencrypted(&bob, reenc)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kdf::structured_info;
     use crate::keys::StellarKeyPair;
     use rand_core::OsRng;
 
+    fn demo_info() -> Vec<u8> {
+        structured_info(b"test", &[])
+    }
+
     #[test]
     fn encrypt_decrypt_alice_pre() {
-        let alice = StellarKeyPair::generate(&mut OsRng);
+        let alice = StellarKeyPair::generate(&mut OsRng, &demo_info());
         let msg = b"stellar succession secret";
         let ct = encrypt(&mut OsRng, &alice.pre_public, msg).unwrap();
         let pt = decrypt(&alice.secret, &ct).unwrap();
@@ -524,8 +535,9 @@ mod tests {
 
     #[test]
     fn full_pre_alice_pre_to_bob_g() {
-        let alice = StellarKeyPair::generate(&mut OsRng);
-        let bob = StellarKeyPair::generate(&mut OsRng);
+        let info = demo_info();
+        let alice = StellarKeyPair::generate(&mut OsRng, &info);
+        let bob = StellarKeyPair::generate(&mut OsRng, &info);
         let msg = b"delegate this payload to bob";
 
         let ct = encrypt(&mut OsRng, &alice.pre_public, msg).unwrap();
@@ -546,7 +558,7 @@ mod tests {
         let pt = decrypt_reencrypted(&bob.secret, &reenc).unwrap();
         assert_eq!(pt, msg);
 
-        let carol = StellarKeyPair::generate(&mut OsRng);
+        let carol = StellarKeyPair::generate(&mut OsRng, &info);
         assert!(decrypt_reencrypted(&carol.secret, &reenc).is_err());
         // Bob cannot open original (needs pre_sk_A)
         assert!(decrypt(&bob.secret, &ct).is_err());
@@ -554,19 +566,20 @@ mod tests {
 
     #[test]
     fn strkey_api() {
-        let alice = StellarKeyPair::generate(&mut OsRng);
-        let bob = StellarKeyPair::generate(&mut OsRng);
+        let info = demo_info();
+        let alice = StellarKeyPair::generate(&mut OsRng, &info);
+        let bob = StellarKeyPair::generate(&mut OsRng, &info);
         let msg = b"via strkey API";
 
         let alice_s = alice.secret.to_strkey();
         let bob_g = bob.stellar_public.to_strkey();
         let bob_s = bob.secret.to_strkey();
 
-        let pre_pk = PrePublicKey::from_stellar_secret_strkey(&alice_s, None).unwrap();
+        let pre_pk = PrePublicKey::from_stellar_secret_strkey(&alice_s, &info).unwrap();
         let ct = encrypt(&mut OsRng, &pre_pk, msg).unwrap();
-        assert_eq!(decrypt_with_strkey(&alice_s, &ct).unwrap(), msg);
+        assert_eq!(decrypt_with_strkey(&alice_s, &info, &ct).unwrap(), msg);
 
-        let rk = rekey_gen_strkey(&mut OsRng, &alice_s, &bob_g).unwrap();
+        let rk = rekey_gen_strkey(&mut OsRng, &alice_s, &info, &bob_g).unwrap();
         let reenc = reencrypt(&rk, &ct).unwrap();
         assert_eq!(
             decrypt_reencrypted_with_strkey(&bob_s, &reenc).unwrap(),
@@ -576,22 +589,22 @@ mod tests {
 
     #[test]
     fn peer_info_pre_roundtrip() {
-        use crate::kdf::info_for_peer;
         use crate::keys::StellarSecretKey;
 
-        let alice_kp = StellarKeyPair::generate(&mut OsRng);
-        let bob = StellarKeyPair::generate(&mut OsRng);
+        let other_info = structured_info(b"other", &[]);
+        let alice_kp = StellarKeyPair::generate(&mut OsRng, &other_info);
+        let bob = StellarKeyPair::generate(&mut OsRng, &other_info);
         let seed = *alice_kp.secret.as_seed_bytes();
-        let info = info_for_peer(bob.stellar_public.as_ed25519_bytes());
+        let info = structured_info(b"rekey", bob.stellar_public.as_ed25519_bytes());
 
-        let alice = StellarSecretKey::from_seed(&seed, Some(&info)).unwrap();
-        let pre_pk = PrePublicKey::from_stellar_seed(&seed, Some(&info)).unwrap();
+        let alice = StellarSecretKey::from_seed(&seed, &info).unwrap();
+        let pre_pk = PrePublicKey::from_stellar_seed(&seed, &info).unwrap();
         let msg = b"peer-isolated payload";
 
         let ct = encrypt(&mut OsRng, &pre_pk, msg).unwrap();
         assert_eq!(decrypt(&alice, &ct).unwrap(), msg);
 
-        // Default Alice key cannot open peer-isolated ciphertext.
+        // Different-info Alice key cannot open peer-isolated ciphertext.
         assert!(decrypt(&alice_kp.secret, &ct).is_err());
 
         let rk = rekey_gen(&mut OsRng, &alice, &bob.stellar_public).unwrap();
@@ -601,8 +614,9 @@ mod tests {
 
     #[test]
     fn serialization_roundtrip() {
-        let alice = StellarKeyPair::generate(&mut OsRng);
-        let bob = StellarKeyPair::generate(&mut OsRng);
+        let info = demo_info();
+        let alice = StellarKeyPair::generate(&mut OsRng, &info);
+        let bob = StellarKeyPair::generate(&mut OsRng, &info);
         let msg = b"serde";
         let ct = encrypt(&mut OsRng, &alice.pre_public, msg).unwrap();
         let ct2 = Ciphertext::from_bytes(&ct.to_bytes()).unwrap();
@@ -617,16 +631,18 @@ mod tests {
 
     #[test]
     fn wrong_key_fails() {
-        let alice = StellarKeyPair::generate(&mut OsRng);
-        let eve = StellarKeyPair::generate(&mut OsRng);
+        let info = demo_info();
+        let alice = StellarKeyPair::generate(&mut OsRng, &info);
+        let eve = StellarKeyPair::generate(&mut OsRng, &info);
         let ct = encrypt(&mut OsRng, &alice.pre_public, b"secret").unwrap();
         assert!(decrypt(&eve.secret, &ct).is_err());
     }
 
     #[test]
     fn rekey_binds_pre_pk_not_stellar_g() {
-        let alice = StellarKeyPair::generate(&mut OsRng);
-        let bob = StellarKeyPair::generate(&mut OsRng);
+        let info = demo_info();
+        let alice = StellarKeyPair::generate(&mut OsRng, &info);
+        let bob = StellarKeyPair::generate(&mut OsRng, &info);
         let rk = rekey_gen(&mut OsRng, &alice.secret, &bob.stellar_public).unwrap();
         // Alice binding is pre_pk, distinct from G...
         assert_ne!(

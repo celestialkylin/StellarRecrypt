@@ -4,12 +4,13 @@
 
 use rand_core::OsRng;
 use stellar_recrypt::{
-    decrypt, decrypt_reencrypted, encrypt, reencrypt, rekey_gen, StellarKeyPair,
+    decrypt, decrypt_reencrypted, encrypt, reencrypt, rekey_gen, structured_info, StellarKeyPair,
 };
 
 fn main() {
-    let alice = StellarKeyPair::generate(&mut OsRng);
-    let bob = StellarKeyPair::generate(&mut OsRng);
+    let info = structured_info(b"example-basic", &[]);
+    let alice = StellarKeyPair::generate(&mut OsRng, &info);
+    let bob = StellarKeyPair::generate(&mut OsRng, &info);
 
     println!("Alice S: {}", alice.secret.to_strkey());
     println!("Alice G (account only): {}", alice.stellar_public.to_strkey());

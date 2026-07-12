@@ -4,7 +4,7 @@
 //!
 //! Stellar-oriented **Proxy Re-Encryption (PRE)** with **asymmetric key isolation**:
 //!
-//! - **Alice (delegator)**: `S...` seed → HKDF → `pre_sk` / `pre_pk` for encrypt, decrypt, rekey
+//! - **Alice (delegator)**: `S...` seed → HKDF(`info`) → `pre_sk` / `pre_pk` for encrypt, decrypt, rekey
 //! - **Bob (delegatee)**: rekey uses his Stellar **`G...`**; decrypt re-encrypted with signing scalar from **`S...`**
 //!
 //! ## Capabilities
@@ -19,12 +19,14 @@
 //!
 //! ```
 //! use stellar_recrypt::{
-//!     decrypt, decrypt_reencrypted, encrypt, reencrypt, rekey_gen, StellarKeyPair,
+//!     decrypt, decrypt_reencrypted, encrypt, reencrypt, rekey_gen, structured_info,
+//!     StellarKeyPair,
 //! };
 //! use rand_core::OsRng;
 //!
-//! let alice = StellarKeyPair::generate(&mut OsRng);
-//! let bob = StellarKeyPair::generate(&mut OsRng);
+//! let info = structured_info(b"demo", &[]);
+//! let alice = StellarKeyPair::generate(&mut OsRng, &info);
+//! let bob = StellarKeyPair::generate(&mut OsRng, &info);
 //!
 //! // Encrypt to Alice's PRE public key (publish alice.pre_public)
 //! let ct = encrypt(&mut OsRng, &alice.pre_public, b"hello").unwrap();
@@ -41,22 +43,24 @@
 //! ```
 //! use stellar_recrypt::{
 //!     decrypt_reencrypted_with_strkey, decrypt_with_strkey, encrypt, reencrypt,
-//!     rekey_gen_strkey, PrePublicKey, StellarKeyPair,
+//!     rekey_gen_strkey, structured_info, PrePublicKey, StellarKeyPair,
 //! };
 //! use rand_core::OsRng;
 //!
-//! let alice = StellarKeyPair::generate(&mut OsRng);
-//! let bob = StellarKeyPair::generate(&mut OsRng);
+//! let info = structured_info(b"demo-strkey", &[]);
+//! let alice = StellarKeyPair::generate(&mut OsRng, &info);
+//! let bob = StellarKeyPair::generate(&mut OsRng, &info);
 //! let msg = b"via strkeys";
 //!
 //! let pre_pk =
-//!     PrePublicKey::from_stellar_secret_strkey(&alice.secret.to_strkey(), None).unwrap();
+//!     PrePublicKey::from_stellar_secret_strkey(&alice.secret.to_strkey(), &info).unwrap();
 //! let ct = encrypt(&mut OsRng, &pre_pk, msg).unwrap();
-//! assert_eq!(decrypt_with_strkey(&alice.secret.to_strkey(), &ct).unwrap(), msg);
+//! assert_eq!(decrypt_with_strkey(&alice.secret.to_strkey(), &info, &ct).unwrap(), msg);
 //!
 //! let rk = rekey_gen_strkey(
 //!     &mut OsRng,
 //!     &alice.secret.to_strkey(),
+//!     &info,
 //!     &bob.stellar_public.to_strkey(),
 //! )
 //! .unwrap();
@@ -78,7 +82,7 @@ mod pre;
 mod strkey;
 
 pub use error::{Error, Result};
-pub use kdf::info_for_peer;
+pub use kdf::structured_info;
 pub use keys::{PrePublicKey, StellarKeyPair, StellarPublicKey, StellarSecretKey};
 pub use pre::{
     decrypt, decrypt_reencrypted, decrypt_reencrypted_with_strkey, decrypt_with_strkey, encrypt,
