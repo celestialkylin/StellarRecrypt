@@ -478,19 +478,22 @@ pub fn decrypt_reencrypted(
 // Strkey convenience (only the paths that still make sense)
 // ---------------------------------------------------------------------------
 
-/// Decrypt with Alice's Stellar `S...` (HKDF `pre_sk`).
+/// Decrypt with Alice's Stellar `S...` (default HKDF `pre_sk`).
 pub fn decrypt_with_strkey(alice_s: &str, ct: &Ciphertext) -> Result<Vec<u8>> {
-    let sk = StellarSecretKey::from_strkey(alice_s)?;
+    let sk = StellarSecretKey::from_strkey(alice_s, None)?;
     decrypt(&sk, ct)
 }
 
 /// Generate re-encryption key from Alice's `S...` and Bob's `G...`.
+///
+/// Uses Alice's default PRE scalar (`info = None`). For per-recipient isolation,
+/// construct [`StellarSecretKey`] with a custom info and call [`rekey_gen`].
 pub fn rekey_gen_strkey<R: CryptoRng + RngCore>(
     rng: &mut R,
     alice_s: &str,
     bob_g: &str,
 ) -> Result<ReencryptionKey> {
-    let alice = StellarSecretKey::from_strkey(alice_s)?;
+    let alice = StellarSecretKey::from_strkey(alice_s, None)?;
     let bob = StellarPublicKey::from_strkey(bob_g)?;
     rekey_gen(rng, &alice, &bob)
 }
@@ -500,7 +503,7 @@ pub fn decrypt_reencrypted_with_strkey(
     bob_s: &str,
     reenc: &ReencryptedCiphertext,
 ) -> Result<Vec<u8>> {
-    let bob = StellarSecretKey::from_strkey(bob_s)?;
+    let bob = StellarSecretKey::from_strkey(bob_s, None)?;
     decrypt_reencrypted(&bob, reenc)
 }
 
@@ -559,7 +562,7 @@ mod tests {
         let bob_g = bob.stellar_public.to_strkey();
         let bob_s = bob.secret.to_strkey();
 
-        let pre_pk = PrePublicKey::from_stellar_secret_strkey(&alice_s).unwrap();
+        let pre_pk = PrePublicKey::from_stellar_secret_strkey(&alice_s, None).unwrap();
         let ct = encrypt(&mut OsRng, &pre_pk, msg).unwrap();
         assert_eq!(decrypt_with_strkey(&alice_s, &ct).unwrap(), msg);
 
@@ -569,6 +572,31 @@ mod tests {
             decrypt_reencrypted_with_strkey(&bob_s, &reenc).unwrap(),
             msg
         );
+    }
+
+    #[test]
+    fn peer_info_pre_roundtrip() {
+        use crate::kdf::info_for_peer;
+        use crate::keys::StellarSecretKey;
+
+        let alice_kp = StellarKeyPair::generate(&mut OsRng);
+        let bob = StellarKeyPair::generate(&mut OsRng);
+        let seed = *alice_kp.secret.as_seed_bytes();
+        let info = info_for_peer(bob.stellar_public.as_ed25519_bytes());
+
+        let alice = StellarSecretKey::from_seed(&seed, Some(&info)).unwrap();
+        let pre_pk = PrePublicKey::from_stellar_seed(&seed, Some(&info)).unwrap();
+        let msg = b"peer-isolated payload";
+
+        let ct = encrypt(&mut OsRng, &pre_pk, msg).unwrap();
+        assert_eq!(decrypt(&alice, &ct).unwrap(), msg);
+
+        // Default Alice key cannot open peer-isolated ciphertext.
+        assert!(decrypt(&alice_kp.secret, &ct).is_err());
+
+        let rk = rekey_gen(&mut OsRng, &alice, &bob.stellar_public).unwrap();
+        let reenc = reencrypt(&rk, &ct).unwrap();
+        assert_eq!(decrypt_reencrypted(&bob.secret, &reenc).unwrap(), msg);
     }
 
     #[test]

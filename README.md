@@ -69,10 +69,41 @@ HKDF parameters:
 HKDF-SHA256(
   ikm  = stellar_seed,
   salt = "StellarRecrypt-v1",
-  info = "pre-encryption-scalar",
+  info = "pre-encryption-scalar",   // default when info = None
   L    = 64
 ) → pre_sk
 ```
+
+Optional custom `info` on key construction isolates Alice's `pre_sk` / `pre_pk` per context
+(e.g. per recipient). No length checks are applied to `info`.
+
+```rust
+use stellar_recrypt::{
+    decrypt, decrypt_reencrypted, encrypt, info_for_peer, reencrypt, rekey_gen,
+    PrePublicKey, StellarKeyPair, StellarSecretKey,
+};
+use rand_core::OsRng;
+
+let alice_seed = *StellarKeyPair::generate(&mut OsRng).secret.as_seed_bytes();
+let bob = StellarKeyPair::generate(&mut OsRng);
+
+// Structured info: "pre-encryption-scalar" || 0x00 || Bob's Ed25519 pubkey
+let info = info_for_peer(bob.stellar_public.as_ed25519_bytes());
+let alice = StellarSecretKey::from_seed(&alice_seed, Some(&info)).unwrap();
+let pre_pk = PrePublicKey::from_stellar_seed(&alice_seed, Some(&info)).unwrap();
+
+let ct = encrypt(&mut OsRng, &pre_pk, b"only for this pair path").unwrap();
+assert_eq!(decrypt(&alice, &ct).unwrap(), b"only for this pair path");
+
+let rk = rekey_gen(&mut OsRng, &alice, &bob.stellar_public).unwrap();
+let reenc = reencrypt(&rk, &ct).unwrap();
+assert_eq!(decrypt_reencrypted(&bob.secret, &reenc).unwrap(), b"only for this pair path");
+```
+
+Use the **same** `info` when deriving `pre_sk` and `pre_pk`. Bob still does not run HKDF;
+he decrypts re-encrypted data with his signing scalar from `S...`.
+
+Default path (unchanged behavior): `StellarSecretKey::from_seed(&seed, None)`.
 
 ## Security notes
 
@@ -91,8 +122,10 @@ This is a simplified single-hop, non-threshold PRE. It does **not** provide cryp
 |-----------------|-------------|
 | `PrePublicKey` | Alice’s encryption public key (32-byte compressed point) |
 | `StellarPublicKey` | Bob’s `G...` |
-| `StellarSecretKey` | `S...`; holds `pre_sk` + signing scalar |
+| `StellarSecretKey` | `S...`; holds `pre_sk` + signing scalar; `from_seed(seed, info)` |
 | `StellarKeyPair` | `secret` + `stellar_public` + `pre_public` |
+| `info_for_peer(pk)` | Structured HKDF info for per-recipient `pre_sk` |
+| `derive_pre_scalar_with_info` | Low-level HKDF PRE scalar with explicit info |
 | `encrypt(rng, &pre_pk, msg)` | Encrypt to Alice |
 | `decrypt(&alice_sk, &ct)` | Alice decrypt |
 | `rekey_gen(rng, &alice_sk, &bob_g)` | Generate `rk` |

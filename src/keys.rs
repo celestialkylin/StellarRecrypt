@@ -15,8 +15,16 @@ use crate::convert::{
     ed25519_seed_to_x25519_private,
 };
 use crate::error::{Error, Result};
-use crate::kdf::derive_pre_scalar;
+use crate::kdf::{derive_pre_scalar, derive_pre_scalar_with_info};
 use crate::strkey;
+
+/// Derive Alice PRE scalar: default info when `info` is `None`, else explicit HKDF info.
+fn pre_scalar_from_seed(seed: &[u8; 32], info: Option<&[u8]>) -> Scalar {
+    match info {
+        None => derive_pre_scalar(seed),
+        Some(info) => derive_pre_scalar_with_info(seed, info),
+    }
+}
 
 /// Alice-side PRE public key: `pre_pk = pre_sk · B`.
 ///
@@ -44,9 +52,15 @@ impl PrePublicKey {
     }
 
     /// Derive PRE public key from a Stellar secret seed (`S...` payload).
+    ///
     /// Only the seed holder can produce this; encryptors should use a published copy.
-    pub fn from_stellar_seed(seed: &[u8; 32]) -> Result<Self> {
-        let pre_sk = derive_pre_scalar(seed);
+    ///
+    /// - `info = None` — library default HKDF info (same as historical behavior)
+    /// - `info = Some(ctx)` — domain-separated scalar (e.g. [`crate::info_for_peer`])
+    ///
+    /// Must use the same `info` as when building the matching [`StellarSecretKey`].
+    pub fn from_stellar_seed(seed: &[u8; 32], info: Option<&[u8]>) -> Result<Self> {
+        let pre_sk = pre_scalar_from_seed(seed, info);
         if pre_sk == Scalar::ZERO {
             return Err(Error::InvalidPrivateKey);
         }
@@ -56,9 +70,11 @@ impl PrePublicKey {
     }
 
     /// Derive from a Stellar secret strkey `S...`.
-    pub fn from_stellar_secret_strkey(s: &str) -> Result<Self> {
+    ///
+    /// See [`Self::from_stellar_seed`] for `info` semantics.
+    pub fn from_stellar_secret_strkey(s: &str, info: Option<&[u8]>) -> Result<Self> {
         let seed = strkey::decode_seed(s)?;
-        Self::from_stellar_seed(&seed)
+        Self::from_stellar_seed(&seed, info)
     }
 
     /// Compressed Edwards Y encoding (32 bytes).
@@ -153,14 +169,22 @@ impl std::fmt::Debug for StellarSecretKey {
 
 impl StellarSecretKey {
     /// Parse a Stellar strkey `S...`.
-    pub fn from_strkey(s: &str) -> Result<Self> {
+    ///
+    /// See [`Self::from_seed`] for `info` semantics.
+    pub fn from_strkey(s: &str, info: Option<&[u8]>) -> Result<Self> {
         let seed = strkey::decode_seed(s)?;
-        Self::from_seed(&seed)
+        Self::from_seed(&seed, info)
     }
 
     /// Build from raw 32-byte Ed25519 seed.
-    pub fn from_seed(seed: &[u8; 32]) -> Result<Self> {
-        let pre_sk = derive_pre_scalar(seed);
+    ///
+    /// - `info = None` — library default HKDF info for `pre_sk` (historical behavior)
+    /// - `info = Some(ctx)` — custom HKDF info (e.g. [`crate::info_for_peer`]); no length checks
+    ///
+    /// The Ed25519 signing scalar is never affected by `info`.
+    /// When encrypting, publish [`Self::pre_public_key`] derived with the **same** `info`.
+    pub fn from_seed(seed: &[u8; 32], info: Option<&[u8]>) -> Result<Self> {
+        let pre_sk = pre_scalar_from_seed(seed, info);
         let signing_scalar = ed25519_seed_to_scalar(seed);
         if pre_sk == Scalar::ZERO || signing_scalar == Scalar::ZERO {
             return Err(Error::InvalidPrivateKey);
@@ -174,11 +198,11 @@ impl StellarSecretKey {
         })
     }
 
-    /// Generate a fresh random Stellar secret key.
+    /// Generate a fresh random Stellar secret key (default PRE info).
     pub fn generate<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
         let mut seed = [0u8; 32];
         rng.fill_bytes(&mut seed);
-        Self::from_seed(&seed).expect("random seed is valid")
+        Self::from_seed(&seed, None).expect("random seed is valid")
     }
 
     /// Stellar `S...` encoding.
@@ -250,8 +274,10 @@ impl StellarKeyPair {
     }
 
     /// Build from a Stellar secret strkey `S...`.
-    pub fn from_secret_strkey(s: &str) -> Result<Self> {
-        let secret = StellarSecretKey::from_strkey(s)?;
+    ///
+    /// See [`StellarSecretKey::from_seed`] for `info` semantics.
+    pub fn from_secret_strkey(s: &str, info: Option<&[u8]>) -> Result<Self> {
+        let secret = StellarSecretKey::from_strkey(s, info)?;
         Ok(Self::from_secret(secret))
     }
 
@@ -280,7 +306,7 @@ mod tests {
         assert!(s.starts_with('S'));
         assert!(kp.stellar_public.to_strkey().starts_with('G'));
 
-        let kp2 = StellarKeyPair::from_secret_strkey(&s).unwrap();
+        let kp2 = StellarKeyPair::from_secret_strkey(&s, None).unwrap();
         assert_eq!(kp2.stellar_public.to_strkey(), kp.stellar_public.to_strkey());
         assert_eq!(kp2.pre_public.to_bytes(), kp.pre_public.to_bytes());
         assert!(kp2.validate_pre_consistency());
@@ -301,7 +327,7 @@ mod tests {
     fn pre_public_from_secret_strkey() {
         let kp = StellarKeyPair::generate(&mut OsRng);
         let s = kp.secret.to_strkey();
-        let pk = PrePublicKey::from_stellar_secret_strkey(&s).unwrap();
+        let pk = PrePublicKey::from_stellar_secret_strkey(&s, None).unwrap();
         assert_eq!(pk.to_bytes(), kp.pre_public.to_bytes());
     }
 
@@ -310,5 +336,32 @@ mod tests {
         let kp = StellarKeyPair::generate(&mut OsRng);
         let pk2 = PrePublicKey::from_bytes(&kp.pre_public.to_bytes()).unwrap();
         assert_eq!(pk2, kp.pre_public);
+    }
+
+    #[test]
+    fn custom_info_isolates_pre_keys() {
+        use crate::kdf::info_for_peer;
+
+        let seed = *StellarKeyPair::generate(&mut OsRng).secret.as_seed_bytes();
+        let bob = StellarKeyPair::generate(&mut OsRng);
+        let carol = StellarKeyPair::generate(&mut OsRng);
+        let info_bob = info_for_peer(bob.stellar_public.as_ed25519_bytes());
+        let info_carol = info_for_peer(carol.stellar_public.as_ed25519_bytes());
+
+        let default = StellarSecretKey::from_seed(&seed, None).unwrap();
+        let for_bob = StellarSecretKey::from_seed(&seed, Some(&info_bob)).unwrap();
+        let for_carol = StellarSecretKey::from_seed(&seed, Some(&info_carol)).unwrap();
+
+        assert_ne!(default.pre_scalar(), for_bob.pre_scalar());
+        assert_ne!(for_bob.pre_scalar(), for_carol.pre_scalar());
+        // Signing identity is independent of PRE info.
+        assert_eq!(
+            default.stellar_public_key().to_strkey(),
+            for_bob.stellar_public_key().to_strkey()
+        );
+
+        let pk_bob = PrePublicKey::from_stellar_seed(&seed, Some(&info_bob)).unwrap();
+        assert_eq!(pk_bob.to_bytes(), for_bob.pre_public_key().to_bytes());
+        assert_ne!(pk_bob.to_bytes(), default.pre_public_key().to_bytes());
     }
 }

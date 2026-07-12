@@ -49,7 +49,8 @@
 //! let bob = StellarKeyPair::generate(&mut OsRng);
 //! let msg = b"via strkeys";
 //!
-//! let pre_pk = PrePublicKey::from_stellar_secret_strkey(&alice.secret.to_strkey()).unwrap();
+//! let pre_pk =
+//!     PrePublicKey::from_stellar_secret_strkey(&alice.secret.to_strkey(), None).unwrap();
 //! let ct = encrypt(&mut OsRng, &pre_pk, msg).unwrap();
 //! assert_eq!(decrypt_with_strkey(&alice.secret.to_strkey(), &ct).unwrap(), msg);
 //!
@@ -77,6 +78,7 @@ mod pre;
 mod strkey;
 
 pub use error::{Error, Result};
+pub use kdf::{derive_pre_scalar_with_info, info_for_peer};
 pub use keys::{PrePublicKey, StellarKeyPair, StellarPublicKey, StellarSecretKey};
 pub use pre::{
     decrypt, decrypt_reencrypted, decrypt_reencrypted_with_strkey, decrypt_with_strkey, encrypt,
