@@ -102,4 +102,11 @@ This is a simplified single-hop, non-threshold PRE. It does **not** provide cryp
 
 ## License
 
-MIT OR Apache-2.0
+Licensed under either of:
+
+- [MIT License](LICENSE-MIT) ([MIT](https://opensource.org/licenses/MIT))
+- [Apache License, Version 2.0](LICENSE-APACHE) ([Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0))
+
+at your option.
+
+Copyright (c) 2026 Cele.Kln

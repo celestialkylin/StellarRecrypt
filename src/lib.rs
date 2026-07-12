@@ -1,5 +1,7 @@
 //! # StellarRecrypt
 //!
+//! SPDX-License-Identifier: MIT OR Apache-2.0
+//!
 //! Stellar-oriented **Proxy Re-Encryption (PRE)** with **asymmetric key isolation**:
 //!
 //! - **Alice (delegator)**: `S...` seed → HKDF → `pre_sk` / `pre_pk` for encrypt, decrypt, rekey
