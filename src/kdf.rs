@@ -37,7 +37,7 @@ pub(crate) fn derive_pre_scalar(seed: &[u8; 32]) -> Scalar {
 /// HKDF-SHA256(ikm=seed, salt="StellarRecrypt-v1", info=info, L=64)
 ///   → Scalar::from_bytes_mod_order_wide
 /// ```
-pub fn derive_pre_scalar_with_info(seed: &[u8; 32], info: &[u8]) -> Scalar {
+pub(crate) fn derive_pre_scalar_with_info(seed: &[u8; 32], info: &[u8]) -> Scalar {
     let hk = Hkdf::<Sha256>::new(Some(SALT), seed);
     let mut okm = [0u8; 64];
     hk.expand(info, &mut okm)
@@ -54,9 +54,9 @@ pub fn derive_pre_scalar_with_info(seed: &[u8; 32], info: &[u8]) -> Scalar {
 /// "pre-encryption-scalar" || 0x00 || peer_ed25519_pk (32 bytes)
 /// ```
 ///
-/// Use with [`derive_pre_scalar_with_info`] or `from_*(..., Some(&info))` so that
-/// Alice's `pre_sk` / `pre_pk` are isolated per counterparty. The encryption
-/// `pre_pk` and decryption/rekey `pre_sk` must use the same info.
+/// Pass to `from_*(..., Some(&info))` so that Alice's `pre_sk` / `pre_pk` are
+/// isolated per counterparty. The encryption `pre_pk` and decryption/rekey
+/// `pre_sk` must use the same info.
 pub fn info_for_peer(peer_ed25519: &[u8; 32]) -> Vec<u8> {
     let mut info = Vec::with_capacity(INFO_PRE_SCALAR.len() + 1 + 32);
     info.extend_from_slice(INFO_PRE_SCALAR);

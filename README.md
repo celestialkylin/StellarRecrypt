@@ -125,7 +125,6 @@ This is a simplified single-hop, non-threshold PRE. It does **not** provide cryp
 | `StellarSecretKey` | `S...`; holds `pre_sk` + signing scalar; `from_seed(seed, info)` |
 | `StellarKeyPair` | `secret` + `stellar_public` + `pre_public` |
 | `info_for_peer(pk)` | Structured HKDF info for per-recipient `pre_sk` |
-| `derive_pre_scalar_with_info` | Low-level HKDF PRE scalar with explicit info |
 | `encrypt(rng, &pre_pk, msg)` | Encrypt to Alice |
 | `decrypt(&alice_sk, &ct)` | Alice decrypt |
 | `rekey_gen(rng, &alice_sk, &bob_g)` | Generate `rk` |

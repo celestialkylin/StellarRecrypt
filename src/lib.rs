@@ -78,7 +78,7 @@ mod pre;
 mod strkey;
 
 pub use error::{Error, Result};
-pub use kdf::{derive_pre_scalar_with_info, info_for_peer};
+pub use kdf::info_for_peer;
 pub use keys::{PrePublicKey, StellarKeyPair, StellarPublicKey, StellarSecretKey};
 pub use pre::{
     decrypt, decrypt_reencrypted, decrypt_reencrypted_with_strkey, decrypt_with_strkey, encrypt,
